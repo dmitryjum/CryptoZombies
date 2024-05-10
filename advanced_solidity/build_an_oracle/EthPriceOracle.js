@@ -27,6 +27,7 @@ async function filterEvents (oracleContract, web3js) {
       console.error('Error on event', err)
       return
     }
+    // Do something
   })
 }
 
@@ -45,13 +46,51 @@ async function processQueue (oracleContract, ownerAddress) {
   }
 }
 
-async function processRequest(oracleContract, ownerAddress, id, callerAddress) {
+async function processRequest (oracleContract, ownerAddress, id, callerAddress) {
   let retries = 0
   while (retries < MAX_RETRIES) {
     try {
-
+      const ethPrice = await retrieveLatestEthPrice()
+      await setLatestEthPrice(oracleContract, callerAddress, ownerAddress, ethPrice, id)
+      return
     } catch (error) {
-      
+      if (retries === MAX_RETRIES - 1) {
+        await setLatestEthPrice(oracleContract, callerAddress, ownerAddress, '0', id)
+        return
+      }
+      retries++
     }
   }
 }
+
+async function setLatestEthPrice (oracleContract, callerAddress, ownerAddress, ethPrice, id) {
+  ethPrice = ethPrice.replace('.', '')
+  const multiplier = new BN(10**10, 10)
+  const ethPriceInt = (new BN(parseInt(ethPrice), 10)).mul(multiplier)
+  const idInt = new BN(parseInt(id))
+  try {
+    await oracleContract.methods.setLatestEthPrice(ethPriceInt.toString(), callerAddress, idInt.toString()).send({ from: ownerAddress })
+  } catch (error) {
+    console.log('Error encountered while calling setLatestEthPrice.')
+    // Do some error handling
+  }
+}
+
+async function init () {
+  const { ownerAddress, web3js, client } = common.loadAccount(PRIVATE_KEY_FILE_NAME)
+  const oracleContract = await getOracleContract(web3js)
+  filterEvents(oracleContract, web3js)
+  return { oracleContract, ownerAddress, client }
+}
+
+(async () => {
+  const { oracleContract, ownerAddress, client } = await init()
+  process.on( 'SIGINT', () => {
+    console.log('Calling client.disconnect()')
+    client.disconnect()
+    process.exit( )
+  })
+  setInterval(async () => {
+    await processQueue(oracleContract, ownerAddress)
+  }, SLEEP_INTERVAL)
+})()
